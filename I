@@ -1,0 +1,302 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Keypad.h>
+
+const char* ssid = "NOME_DO_WIFI";
+const char* password = "SENHA_DO_WIFI";
+
+WebServer server(80);
+
+#define I2C_SDA 21
+#define I2C_SCL 22
+
+const byte ROWS = 4;
+const byte COLS = 4;
+
+byte rowPins[ROWS] = {16, 17, 18, 19};
+byte colPins[COLS] = {25, 26, 27, 32};
+
+char keys[ROWS][COLS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+
+Keypad keypad = Keypad(
+  makeKeymap(keys),
+  rowPins,
+  colPins,
+  ROWS,
+  COLS
+);
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+const int relayPin = 23;
+
+String enteredCode = "";
+String storedCode = "";
+
+bool isLocked = false;
+
+void setup() {
+
+  Serial.begin(115200);
+
+  Wire.begin(I2C_SDA, I2C_SCL);
+
+  lcd.init();
+  lcd.backlight();
+
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, LOW);
+
+  lcd.setCursor(0, 0);
+  lcd.print("Conectando WiFi");
+
+  WiFi.begin(ssid, password);
+
+  Serial.print("Conectando ao WiFi");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi conectado!");
+  Serial.print("IP do ESP32: ");
+  Serial.println(WiFi.localIP());
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("WiFi conectado");
+
+  lcd.setCursor(0, 1);
+  lcd.print(WiFi.localIP());
+
+  delay(3000);
+
+  server.on("/", HTTP_GET, []() {
+
+    server.send(
+      200,
+      "text/plain",
+      "ESP32 Tranca IoT funcionando!"
+    );
+
+  });
+
+  server.on("/status", HTTP_GET, []() {
+
+    String estado = isLocked ? "fechada" : "aberta";
+
+    String json = "{";
+
+    json += "\"locked\":";
+    json += isLocked ? "true" : "false";
+
+    json += ",\"estado\":\"";
+    json += estado;
+
+    json += "\",\"wifi\":true";
+
+    json += "}";
+
+    server.send(
+      200,
+      "application/json",
+      json
+    );
+
+  });
+
+  server.on("/abrir", HTTP_GET, []() {
+
+    if (isLocked) {
+
+      unlockSafe();
+
+      server.send(
+        200,
+        "application/json",
+        "{\"sucesso\":true,\"estado\":\"aberta\"}"
+      );
+
+    } else {
+
+      server.send(
+        200,
+        "application/json",
+        "{\"sucesso\":false,\"estado\":\"aberta\",\"mensagem\":\"Tranca ja esta aberta\"}"
+      );
+
+    }
+
+  });
+
+  server.enableCORS(true);
+
+  server.begin();
+
+  Serial.println("Servidor HTTP iniciado!");
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Code to Lock:");
+
+}
+
+void loop() {
+
+  server.handleClient();
+
+  char key = keypad.getKey();
+
+  if (key) {
+
+    if (key == '#') {
+
+      if (!isLocked) {
+
+        if (enteredCode.length() == 4) {
+
+          storedCode = enteredCode;
+
+          lockSafe();
+
+        } else {
+
+          displayError("Enter 4 digits", 0);
+
+        }
+
+      } else {
+
+        if (enteredCode == storedCode) {
+
+          unlockSafe();
+
+        } else {
+
+          displayError("Wrong Code", 1);
+
+        }
+
+      }
+
+      enteredCode = "";
+
+      lcd.setCursor(0, 1);
+      lcd.print("                ");
+
+    }
+
+    else if (key == '*') {
+
+      enteredCode = "";
+
+      lcd.setCursor(0, 1);
+      lcd.print("                ");
+
+    }
+
+    else if (key >= '0' && key <= '9') {
+
+      if (enteredCode.length() < 4) {
+
+        enteredCode += key;
+
+        lcd.setCursor(
+          enteredCode.length() - 1,
+          1
+        );
+
+        lcd.print('*');
+
+      }
+
+    }
+
+  }
+
+}
+
+void lockSafe() {
+
+  isLocked = true;
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Locking Safe...");
+
+  digitalWrite(relayPin, HIGH);
+
+  delay(2000);
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Safe Locked");
+
+  delay(2000);
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Code to Unlock");
+
+}
+
+void unlockSafe() {
+
+  isLocked = false;
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Unlocking Safe...");
+
+  digitalWrite(relayPin, LOW);
+
+  delay(2000);
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Safe Unlocked");
+
+  delay(2000);
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Code to Lock:");
+
+}
+
+void displayError(String message, int code) {
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print(message);
+
+  delay(3000);
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+
+  if (code == 0) {
+    lcd.print("Code to Lock:");
+  } else {
+    lcd.print("Code to Unlock");
+  }
+
+}
